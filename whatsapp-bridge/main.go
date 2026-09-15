@@ -590,8 +590,13 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		return false, "", "", "", fmt.Errorf("failed to create chat directory: %v", err)
 	}
 
-	// Generate a local path for the file
-	localPath = fmt.Sprintf("%s/%s", chatDir, filename)
+	// The stored filename comes from time.Now() at processing time, not from
+	// the message. During history sync dozens of messages are processed within
+	// the same second and all get the same "audio_<ts>.ogg" name. Since the
+	// cache check below returns the file whenever it exists, every audio in a
+	// chat would resolve to the first one downloaded. Key the path on the
+	// message ID, which is unique per message.
+	localPath = fmt.Sprintf("%s/%s_%s", chatDir, messageID, filename)
 
 	// Get absolute path
 	absPath, err := filepath.Abs(localPath)
