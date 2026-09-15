@@ -590,8 +590,13 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		return false, "", "", "", fmt.Errorf("failed to create chat directory: %v", err)
 	}
 
-	// Generate a local path for the file
-	localPath = fmt.Sprintf("%s/%s", chatDir, filename)
+	// O filename salvo no banco vem de time.Now() no momento do sync, nao da
+	// mensagem: no history sync dezenas de audios sao processados no mesmo
+	// segundo e todos viram "audio_<ts>.ogg" identico. Como logo abaixo o cache
+	// devolve o arquivo se ele ja existe, cada audio da conversa retornava o
+	// primeiro — transcricoes diferentes vinham iguais, sem erro nenhum.
+	// O messageID e unico por mensagem, entao e ele que da o nome.
+	localPath = fmt.Sprintf("%s/%s_%s", chatDir, messageID, filename)
 
 	// Get absolute path
 	absPath, err := filepath.Abs(localPath)
@@ -640,10 +645,29 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		MediaType:     waMediaType,
 	}
 
-	// Download the media using whatsmeow client
-	mediaData, err := client.Download(downloader)
+	// A URL salva no banco e assinada e expira — e a que vem do history sync
+	// ja chega invalida, o que da 403 em tudo. O direct_path nao expira: o
+	// whatsmeow re-assina a URL na hora a partir dele. Por isso tentamos esse
+	// caminho primeiro e so caimos no Download(downloader) (que prefere a URL
+	// salva) se ele falhar.
+	ctx := context.Background()
+	var mediaData []byte
+
+	if directPath != "" && strings.HasPrefix(directPath, "/") {
+		mediaData, err = client.DownloadMediaWithPath(
+			ctx, directPath, fileEncSHA256, fileSHA256, mediaKey, waMediaType, "", false,
+		)
+	} else {
+		err = fmt.Errorf("sem direct_path utilizavel")
+	}
+
 	if err != nil {
-		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
+		var fallbackErr error
+		mediaData, fallbackErr = client.Download(ctx, downloader)
+		if fallbackErr != nil {
+			return false, "", "", "", fmt.Errorf(
+				"failed to download media: via direct_path: %v; via url: %v", err, fallbackErr)
+		}
 	}
 
 	// Save the downloaded media to file
@@ -666,13 +690,12 @@ func extractDirectPathFromURL(url string) string {
 		return url // Return original URL if parsing fails
 	}
 
-	pathPart := parts[1]
-
-	// Remove query parameters
-	pathPart = strings.SplitN(pathPart, "?", 2)[0]
-
-	// Create proper direct path format
-	return "/" + pathPart
+	// NAO remover a query string: ela carrega oh/oe/_nc_sid/mms3, que sao os
+	// parametros de autenticacao do CDN. Alem disso o whatsmeow monta a URL
+	// final concatenando "&hash=..." direto no direct_path (download.go), ou
+	// seja, ele espera que a query ja venha junto. Cortar no "?" produz uma URL
+	// sem "?" com "&" solto — malformada — e o CDN responde 403 em tudo.
+	return "/" + parts[1]
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
@@ -800,14 +823,14 @@ func main() {
 		return
 	}
 
-	container, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
 	}
 
 	// Get device store - This contains session information
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No device exists, create one
@@ -973,7 +996,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 		// If we didn't get a name, try group info
 		if name == "" {
-			groupInfo, err := client.GetGroupInfo(jid)
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
 			if err == nil && groupInfo.Name != "" {
 				name = groupInfo.Name
 			} else {
@@ -988,7 +1011,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		logger.Infof("Getting name for contact: %s", chatJID)
 
 		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(jid)
+		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 		if err == nil && contact.FullName != "" {
 			name = contact.FullName
 		} else if sender != "" {
