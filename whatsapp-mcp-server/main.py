@@ -14,6 +14,7 @@ from whatsapp import (
     send_audio_message as whatsapp_audio_voice_message,
     download_media as whatsapp_download_media
 )
+from transcribe import transcribe_file
 
 # Initialize FastMCP server
 mcp = FastMCP("whatsapp")
@@ -220,6 +221,39 @@ def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
         "success": success,
         "message": status_message
     }
+
+@mcp.tool()
+def transcribe_audio(message_id: str, chat_jid: str, language: str = "pt") -> Dict[str, Any]:
+    """Transcribe a WhatsApp voice message or audio to text, locally and for free.
+
+    Downloads the audio (if not already downloaded) and runs whisper.cpp on this
+    machine. No audio ever leaves the computer and there is no API cost.
+
+    Args:
+        message_id: The ID of the message containing the audio
+        chat_jid: The JID of the chat containing the message
+        language: Spoken language code (default "pt" for Portuguese; use "en",
+                  "es", or "auto" to let Whisper detect it)
+
+    Returns:
+        A dictionary with success status, the transcript text, and the audio path
+    """
+    path = whatsapp_download_media(message_id, chat_jid)
+    if not path:
+        return {
+            "success": False,
+            "message": (
+                "Não foi possível baixar o áudio. Mídia do WhatsApp expira: "
+                "áudios antigos podem não estar mais disponíveis no servidor."
+            ),
+        }
+
+    try:
+        text = transcribe_file(path, language=language)
+    except Exception as e:
+        return {"success": False, "message": f"Falha ao transcrever: {e}", "audio_path": path}
+
+    return {"success": True, "transcript": text, "audio_path": path}
 
 @mcp.tool()
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
