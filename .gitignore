@@ -1,3 +1,18 @@
+# Sessão e mensagens do WhatsApp — NUNCA versionar.
+# store/ guarda o banco, as credenciais da sessão e TODA a mídia baixada
+# das conversas. Um "git add -A" descuidado publica o WhatsApp inteiro.
+store/
 *.db
+
+# Modelo do Whisper (centenas de MB, baixado pelo setup)
+models/
+
+# Binário compilado do bridge
+whatsapp-bridge/whatsapp-bridge
+
+# Logs e backups locais
+*.log
+*.bak
+*.bak[0-9]
+
 claude_desktop_config.json
-whatsapp.log
