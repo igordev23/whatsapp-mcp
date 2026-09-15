@@ -640,10 +640,28 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		MediaType:     waMediaType,
 	}
 
-	// Download the media using whatsmeow client
-	mediaData, err := client.Download(context.Background(), downloader)
+	// The stored URL is signed and expires; URLs that arrive through history
+	// sync are often already invalid. The direct path does not expire —
+	// whatsmeow re-signs a fresh URL from it — so try that first and only fall
+	// back to Download(), which prefers the stored URL.
+	ctx := context.Background()
+	var mediaData []byte
+
+	if directPath != "" && strings.HasPrefix(directPath, "/") {
+		mediaData, err = client.DownloadMediaWithPath(
+			ctx, directPath, fileEncSHA256, fileSHA256, mediaKey, waMediaType, "", false,
+		)
+	} else {
+		err = fmt.Errorf("no usable direct path")
+	}
+
 	if err != nil {
-		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
+		var fallbackErr error
+		mediaData, fallbackErr = client.Download(ctx, downloader)
+		if fallbackErr != nil {
+			return false, "", "", "", fmt.Errorf(
+				"failed to download media: via direct path: %v; via url: %v", err, fallbackErr)
+		}
 	}
 
 	// Save the downloaded media to file
@@ -666,13 +684,12 @@ func extractDirectPathFromURL(url string) string {
 		return url // Return original URL if parsing fails
 	}
 
-	pathPart := parts[1]
-
-	// Remove query parameters
-	pathPart = strings.SplitN(pathPart, "?", 2)[0]
-
-	// Create proper direct path format
-	return "/" + pathPart
+	// Keep the query string. It carries oh/oe/_nc_sid/mms3, which are the
+	// CDN's authentication parameters. whatsmeow also builds the final URL by
+	// appending "&hash=..." directly to the direct path (see download.go), so
+	// it expects the query to already be there. Stripping it produces a URL
+	// with no "?" and a dangling "&", which the CDN rejects with 403.
+	return "/" + parts[1]
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
