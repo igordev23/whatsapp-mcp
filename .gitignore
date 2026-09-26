@@ -16,3 +16,7 @@ whatsapp-bridge/whatsapp-bridge
 *.bak[0-9]
 
 claude_desktop_config.json
+
+# binarios compilados do bridge (Windows)
+whatsapp-bridge/whatsapp-bridge.exe
+whatsapp-bridge/*.exe~
